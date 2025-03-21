@@ -1,0 +1,22 @@
+name: gbrunner
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.13
+  - pip
+  #
+  - numpy
+  - pandas
+  - polars
+  - scikit-learn
+  - scipy
+  - tqdm
+  #
+  - pip:
+      - anndata
+      - arboreto
+      - scanpy
+      - xgboost
+      - lightgbm
