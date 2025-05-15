@@ -163,4 +163,4 @@ cython_debug/
 #.idea/
 
 # Data directories
-sbatch/
+sbatch/*.out

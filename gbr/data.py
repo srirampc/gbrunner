@@ -5,9 +5,9 @@ import numpy as np
 import numpy.typing as npt
 import scanpy as sc
 import pandas as pd
-import dataclasses as dcl
 #
 from anndata import AnnData
+from pydantic import BaseModel
 
 NDFloatArray : t.TypeAlias = npt.NDArray[np.floating[t.Any]]
 
@@ -15,8 +15,8 @@ def idx_dict(slist: list[str]) -> dict[str, int]:
     return dict(zip(slist, range(len(slist))))
 
 
-@dcl.dataclass
-class SCDataArgs:
+class SCDataArgs(BaseModel):
+    format: t.Literal['ad'] = 'ad'
     data : t.Literal['sparse', 'dense'] = 'dense'
     tf_file : str = "./trrust_tf.txt"
     h5ad_file : str = "./../rsc/h5/adata.raw.h5ad"
@@ -26,8 +26,8 @@ class SCDataArgs:
     nsub_cells : int  = 0
 
 
-@dcl.dataclass
-class CSVDataArgs:
+class CSVDataArgs(BaseModel):
+    format: t.Literal['csv'] = 'csv'
     csv_file : str = ""
     nsub_cells : int  = 0
 
@@ -75,6 +75,13 @@ class ExpDataProcessor(abc.ABC):
     def tf_list(self) -> list[str]:
         return self.tf_list_
 
+    def print(self):
+        print(f"""
+            No. Genes             : {self.ngenes}
+            No. TF                : {self.ntfs}
+            Expt Matrix shape     : {self.exp_matrix.shape}
+            TF Expt Matrix  shape : {self.tf_exp_matrix.shape}
+        """)
 
 class CSVDataProcessor(ExpDataProcessor):
     def __init__(self, sargs: CSVDataArgs) -> None:

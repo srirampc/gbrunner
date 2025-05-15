@@ -7,9 +7,13 @@ dependencies:
   - python=3.13
   - pip
   #
+  - basedpyright
+  - devtools
+  - jupyter
   - numpy
   - pandas
   - polars
+  - pydantic
   - scikit-learn
   - scipy
   - tqdm
@@ -17,6 +21,6 @@ dependencies:
   - pip:
       - anndata
       - arboreto
+      - lightgbm
       - scanpy
       - xgboost
-      - lightgbm

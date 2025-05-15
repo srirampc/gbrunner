@@ -1,0 +1,11 @@
+device: "gpu"
+method: "stxgb"
+in_data:
+  data: "dense"
+  format: "ad"
+  ntop_genes: 10000
+  nsub_cells: 200000
+  tf_file: "data/pbmc/trrust_tf.txt"
+  h5ad_file: "data/rsc/h5/adata.raw.h5ad"
+rstats_file: "networks/stxgb200k_gpu_dense_stats.json"
+network_file: "networks/stxgb200k_gpu_dense.csv"

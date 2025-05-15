@@ -1,4 +1,3 @@
-import dataclasses as dcl
 import itertools
 import json
 import typing as t
@@ -14,6 +13,7 @@ import arboreto.algo
 import arboreto.core
 #
 from timeit import default_timer as timer
+from pydantic import BaseModel
 #
 from .data import ExpDataProcessor, NDFloatArray
 
@@ -32,7 +32,9 @@ Regressor : t.TypeAlias = (
 )
 
 
-RegressorMethod = t.Literal['xgb', 'sgbr', 'arb:default', 'arb:gbm', 'lgb'] 
+RegressorMethod = t.Literal[
+    'xgb', 'stxgb', 'sgbr', 'arb:default', 'arb:gbm', 'lgb', 'stlgb'
+] 
 
 
 def matrix_sub_row(
@@ -70,10 +72,18 @@ def matrix_column(
         return in_matrix[:, col].flatten()
 
 
-@dcl.dataclass
-class GMStats:
+class GMStats(BaseModel):
     run_time: float = 0.0
+    fit_time: float = 0.0
     n_features: float = 0.0
+
+class RunGMStats(BaseModel):
+    total_run_time: float = 0.0
+    gmodel_data: list[GMStats] = []
+
+    @classmethod
+    def init(cls, ngenes: int):
+        return cls(gmodel_data=[GMStats() for _ in range(ngenes)])
 
 
 @t.final
@@ -81,9 +91,9 @@ class GBRunner:
     def __init__(self, expr_data: ExpDataProcessor) -> None:
         self.sd_ = expr_data
         # Output data
-        self.mstats_ = [GMStats() for _ in range(self.sd_.ngenes)]
+        self.rstats_ = RunGMStats.init(self.sd_.ngenes)
         self.importance_ : NDFloatArray | None = None
-        self.run_time_ = 0.0
+        # self.run_time_ = 0.0
         self.run_desc_ = "GB Runner"
 
     def idx_dict(self, slist: list[str]) -> dict[str, int]:
@@ -103,39 +113,43 @@ class GBRunner:
         self,
         target_gene: str,
         **run_args: dict[str, t.Any]
-    ) -> skm.GradientBoostingRegressor | None:
+    ) -> tuple[skm.GradientBoostingRegressor, float] | None:
         exp_mat, tg_exp = self.target_gene_matrix(target_gene)
         if tg_exp is None:
             return None
+        start_time = timer() 
         skl = skm.GradientBoostingRegressor(
             **run_args  # pyright: ignore[reportArgumentType]
-        )
-        return skl.fit(exp_mat, tg_exp)
+        ).fit(exp_mat, tg_exp)
+        return skl, timer() - start_time
 
     def xgb_fit(
         self,
         target_gene: str,
         **run_args: t.Any
-    ) -> xgb.XGBModel | None:
+    ) -> tuple[xgb.XGBModel, float] | None:
         exp_mat, tg_exp = self.target_gene_matrix(target_gene)
         if tg_exp is None:
             return None
-        xsr = xgb.XGBRegressor(**run_args)
-        return xsr.fit(
+        start_time = timer() 
+        xsr = xgb.XGBRegressor(**run_args).fit(
             exp_mat,
             tg_exp
-        ) 
+        )
+        return xsr, timer() - start_time
+        
 
     def lgb_fit(
         self,
         target_gene: str,
         **run_args: t.Any
-    ) -> lgb.LGBMRegressor | None:
+    ) -> tuple[lgb.LGBMRegressor, float] | None:
         exp_mat, tg_exp = self.target_gene_matrix(target_gene)
         if tg_exp is None:
             return None
-        lsr = lgb.LGBMRegressor(**run_args)
-        return lsr.fit(exp_mat, tg_exp)
+        start_time = timer() 
+        lsr = lgb.LGBMRegressor(**run_args).fit(exp_mat, tg_exp)
+        return lsr, timer() - start_time
 
 
     def fit(
@@ -143,22 +157,23 @@ class GBRunner:
         regressor_method: RegressorMethod,
         target_gene: str,
         **run_args: t.Any
-    ) -> Regressor | None:
+    ) -> tuple[Regressor, float] | None:
         match regressor_method:
-            case 'xgb':
+            case 'xgb' | 'stxgb':
                 return self.xgb_fit(target_gene, **run_args)
             case 'sgbr':
                 return self.sgbr_fit(target_gene, **run_args)
-            case 'lgb':
+            case 'lgb' | 'stlgb':
                 return self.lgb_fit(target_gene, **run_args)
             case _:
                 return None
 
-    def update(self, gene: str, gmodel: Regressor, rtime: float):
+    def update(self, gene: str, gmodel: Regressor, rtime: float, fit_time:float):
         gidx = self.sd_.gene_map[gene]
         mfeat = gmodel.feature_importances_
-        self.mstats_[gidx].run_time = rtime
-        self.mstats_[gidx].n_features = int(np.sum(mfeat != 0.0))
+        self.rstats_.gmodel_data[gidx].run_time = rtime
+        self.rstats_.gmodel_data[gidx].fit_time = fit_time
+        self.rstats_.gmodel_data[gidx].n_features = int(np.sum(mfeat != 0.0))
         if gene in self.sd_.tf_map:
             mfeat = np.reshape(mfeat, shape=(1, self.sd_.ntfs-1))
             tidx = self.sd_.tf_map[gene]
@@ -179,9 +194,10 @@ class GBRunner:
         **gb_args: t.Any
     ):
         start_time = timer() 
-        mdx  = self.fit(method, tgene, **gb_args)
-        if mdx:
-            self.update(tgene, mdx, timer() - start_time)
+        fmdx  = self.fit(method, tgene, **gb_args)
+        if fmdx:
+            mdx, fit_time = fmdx
+            self.update(tgene, mdx, timer() - start_time, fit_time)
 
     def init_importance(self, take_n: int | None=None):
         self.importance_  = np.zeros(
@@ -215,8 +231,8 @@ class GBRunner:
         self.init_importance(take_n)
         for target_gene in self.genes_itr(take_n, use_tqdm):
             self.gene_model(method, target_gene, **run_args)
-        self.run_time_ = timer() - start_time
-        print(f"Model Generation : {self.run_time_} seconds")
+        self.rstats_.total_run_time = timer() - start_time
+        print(f"Model Generation : {self.rstats_.total_run_time} seconds")
     
     def dump(
         self,
@@ -225,10 +241,7 @@ class GBRunner:
     ):
         if rstats_out_file:
             with open(rstats_out_file, 'w') as ofx:
-                json.dump({
-                    "total_run_time": self.run_time_,
-                    "model_data": [dcl.asdict(x) for x in self.mstats_]
-                }, ofx, indent=4)
+                ofx.write(self.rstats_.model_dump_json(indent=4))
         if (out_file is not None ) and (self.importance_ is not None):
             im_shape = self.importance_.shape
             tf_tgt_itr = itertools.product(
@@ -237,7 +250,7 @@ class GBRunner:
             )
             rdf = pd.DataFrame(
                 tf_tgt_itr,
-                columns=pd.Series(["Target", "TF"])
+                columns=pd.Series(["target", "TF"])
             )
             rdf["importance"] = self.importance_.flatten()
             rdf.to_csv(out_file)
@@ -252,8 +265,10 @@ class ARBRunner:
     def run_regression(
         self,
         method: RegressorMethod = 'arb:default',
-        **run_args: t.Any,
+        **_run_args: t.Any,
     ) -> pd.DataFrame:
+        mat_shape = str(self.sd_.exp_matrix.shape)
+        gene_l = str(len(self.sd_.gene_list)) 
         match method:
             case 'arb:gbm':
                 print(f"Running GBM with {arboreto.core.GBM_KWARGS}")
@@ -265,7 +280,9 @@ class ARBRunner:
                     tf_names=self.sd_.tf_list, #pyright:ignore[reportArgumentType]
                 )
             case "arb:default" | _ :
-                print(f"Running GBM with default args")
+                print(
+                    f"Running GBM with default args {mat_shape} {gene_l}"
+                )
                 return arboreto.algo.grnboost2(
                     expression_data=self.sd_.exp_matrix,
                     gene_names=self.sd_.gene_list,
@@ -294,5 +311,3 @@ class ARBRunner:
                 }, ofx, indent=4)
         if (out_file is not None ) and (self.network_ is not None):
             self.network_.to_csv(out_file)
-
-
