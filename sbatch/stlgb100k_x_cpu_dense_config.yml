@@ -10,6 +10,7 @@ in_data:
 regressor_args:
   regressor: "stlgb"
   n_jobs: 32
+  n_estimators: 1000
   force_col_wise: true
-rstats_file: "networks/stlgb100k_cpu_dense_stats.json"
-network_file: "networks/stlgb100k_cpu_dense.csv"
+rstats_file: "networks/stlgb100k_x_cpu_dense_stats.json"
+network_file: "networks/stlgb100k_x_cpu_dense.csv"

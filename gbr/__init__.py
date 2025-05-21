@@ -18,6 +18,75 @@ from pydantic import BaseModel
 from .data import ExpDataProcessor, NDFloatArray
 
 
+class XGBArgs(BaseModel):
+    regressor: t.Literal['xgb'] = 'xgb' 
+    learning_rate : float = 0.01
+    n_estimators  : int = 500
+
+
+class STXGBArgs(BaseModel):
+    regressor: t.Literal['stxgb'] = 'stxgb' 
+    learning_rate: float = 0.01
+    n_estimators: int = 500  # can be arbitrarily large
+    # max_features: float = 0.1
+    colsample_bytree: float = 0.2 
+    colsample_bynode: float = 0.5 
+    subsample: float  = 0.9
+
+
+class SGBMArgs(BaseModel): 
+    regressor: t.Literal['sgbr'] = 'sgbr' 
+    learning_rate : float = 0.01
+    n_estimators  : float = 500
+    max_features  : float = 0.1
+    early_stop: bool = False
+
+
+class STSGBMArgs(BaseModel): 
+    regressor: t.Literal['stsgbr'] = 'stsgbr' 
+    learning_rate : float = 0.01
+    n_estimators  : float = 5000
+    max_features  : float = 0.1
+    subsample: float  = 0.9
+    early_stop: bool = True
+
+
+class LGBArgs(BaseModel):
+    regressor: t.Literal['lgb'] = 'lgb' 
+    n_estimators: int = 500
+    learning_rate: float = 0.01
+    n_jobs: int = 0
+    verbosity: int = 0 
+    force_col_wise: bool = False
+    force_row_wise: bool = False
+    objective: str = 'regression'
+    importance_type: str = 'gain'
+
+
+class STLGBArgs(BaseModel):
+    regressor: t.Literal['stlgb'] = 'stlgb' 
+    n_estimators: int = 500
+    learning_rate: float = 0.01
+    n_jobs: int = 0 
+    verbosity: int = 0 
+    force_col_wise: bool = False
+    force_row_wise: bool = False
+    colsample_bytree: float = 0.1 
+    # colsample_bynode: float = 0.5 
+    objective: str = 'regression'
+    importance_type: str = 'gain'
+
+
+GBRArgs : t.TypeAlias = (
+    XGBArgs |
+    STXGBArgs |
+    SGBMArgs |
+    STSGBMArgs |
+    LGBArgs |
+    STLGBArgs
+)
+
+
 DataArray : t.TypeAlias = (
     NDFloatArray |
     scipy.sparse.csr_matrix |
@@ -32,9 +101,72 @@ Regressor : t.TypeAlias = (
 )
 
 
-RegressorMethod = t.Literal[
-    'xgb', 'stxgb', 'sgbr', 'arb:default', 'arb:gbm', 'lgb', 'stlgb'
-] 
+GBMethod = t.Literal[
+    'xgb', 'stxgb', 'sgbr', 'stsgbr', 'arb:default', 'arb:gbm', 'lgb', 'stlgb'
+]
+
+EARLY_STOP_WINDOW_LENGTH = 25
+
+class EarlyStopMonitor:
+
+    def __init__(self, window_length: int=EARLY_STOP_WINDOW_LENGTH):
+        """
+        :param window_length: length of the window over the out-of-bag errors.
+        """
+
+        self.window_length : int = window_length
+        self.boost_rounds : int = 0
+
+    def window_boundaries(self, current_round: int):
+        """
+        :param current_round:
+        :return: the low and high boundaries of the estimators window to consider.
+        """
+
+        lo = max(0, current_round - self.window_length + 1)
+        hi = current_round + 1
+
+        return lo, hi
+
+    def __call__(
+        self,
+        current_round: int,
+        regressor: skm.GradientBoostingRegressor,
+        _
+    ):
+        """
+        Implementation of the GradientBoostingRegressor monitor function API.
+
+        :param current_round: the current boosting round.
+        :param regressor: the regressor.
+        :param _: ignored.
+        :return: True if the regressor should stop early, else False.
+        """
+        self.boost_rounds = current_round
+        if current_round >= self.window_length - 1:
+            lo, hi = self.window_boundaries(current_round)
+            return np.mean(regressor.oob_improvement_[lo: hi]) < 0
+        else:
+            return False
+
+def gbrunner_args(method: GBMethod) -> GBRArgs:
+    match method:
+        case 'sgbr':
+            return SGBMArgs()
+        case 'stsgbr':
+            return STSGBMArgs()
+        case 'stxgb':
+            return STXGBArgs()
+        case 'lgb':
+            return LGBArgs()
+        case 'stlgb':
+            return STLGBArgs()
+        case 'xgb':
+            return XGBArgs()
+        case 'arb:default' | 'arb:gbm':
+            return XGBArgs()
+
+
 
 
 def matrix_sub_row(
@@ -75,24 +207,30 @@ def matrix_column(
 class GMStats(BaseModel):
     run_time: float = 0.0
     fit_time: float = 0.0
+    n_rounds: int = 0
     n_features: float = 0.0
 
 class RunGMStats(BaseModel):
     total_run_time: float = 0.0
-    gmodel_data: list[GMStats] = []
+    gmodel_data: list[GMStats | None] = []
 
     @classmethod
     def init(cls, ngenes: int):
-        return cls(gmodel_data=[GMStats() for _ in range(ngenes)])
+        return cls(gmodel_data=[None for _ in range(ngenes)])
 
 
 @t.final
 class GBRunner:
-    def __init__(self, expr_data: ExpDataProcessor) -> None:
+    def __init__(
+        self,
+        expr_data: ExpDataProcessor,
+        device: t.Literal["cpu", "gpu"]
+    ) -> None:
         self.sd_ = expr_data
         # Output data
         self.rstats_ = RunGMStats.init(self.sd_.ngenes)
         self.importance_ : NDFloatArray | None = None
+        self.device_ = "cuda" if device == "gpu" else None
         # self.run_time_ = 0.0
         self.run_desc_ = "GB Runner"
 
@@ -112,68 +250,82 @@ class GBRunner:
     def sgbr_fit(
         self,
         target_gene: str,
-        **run_args: dict[str, t.Any]
-    ) -> tuple[skm.GradientBoostingRegressor, float] | None:
+        gb_args: SGBMArgs | STSGBMArgs,
+    ) -> tuple[skm.GradientBoostingRegressor, GMStats] | None:
         exp_mat, tg_exp = self.target_gene_matrix(target_gene)
         if tg_exp is None:
             return None
+        early_stop = EarlyStopMonitor() if gb_args.early_stop else None
+        run_args = gb_args.model_dump(exclude=set(["regressor", "early_stop"]))
         start_time = timer() 
-        skl = skm.GradientBoostingRegressor(
-            **run_args  # pyright: ignore[reportArgumentType]
-        ).fit(exp_mat, tg_exp)
-        return skl, timer() - start_time
+        skl = skm.GradientBoostingRegressor(**run_args).fit(
+            exp_mat, tg_exp, monitor=early_stop
+        )
+        return skl, GMStats(
+            fit_time=timer() - start_time,
+            n_rounds=early_stop.boost_rounds if early_stop else 0
+        )
 
     def xgb_fit(
         self,
         target_gene: str,
-        **run_args: t.Any
-    ) -> tuple[xgb.XGBModel, float] | None:
+        gb_args: XGBArgs | STXGBArgs,
+    ) -> tuple[xgb.XGBModel, GMStats] | None:
         exp_mat, tg_exp = self.target_gene_matrix(target_gene)
         if tg_exp is None:
             return None
+        run_args = gb_args.model_dump(exclude=set(["regressor"]))
+        if self.device_:
+            run_args["device"] = "cuda"
         start_time = timer() 
         xsr = xgb.XGBRegressor(**run_args).fit(
             exp_mat,
             tg_exp
         )
-        return xsr, timer() - start_time
+        return xsr, GMStats(fit_time=timer() - start_time)
         
 
     def lgb_fit(
         self,
         target_gene: str,
-        **run_args: t.Any
-    ) -> tuple[lgb.LGBMRegressor, float] | None:
+        gb_args: LGBArgs | STLGBArgs,
+    ) -> tuple[lgb.LGBMRegressor, GMStats] | None:
         exp_mat, tg_exp = self.target_gene_matrix(target_gene)
         if tg_exp is None:
             return None
+        run_args = gb_args.model_dump(exclude=set(["regressor"]))
         start_time = timer() 
         lsr = lgb.LGBMRegressor(**run_args).fit(exp_mat, tg_exp)
-        return lsr, timer() - start_time
+        return lsr, GMStats(fit_time=timer() - start_time)
 
 
     def fit(
         self,
-        regressor_method: RegressorMethod,
+        regressor_method: GBMethod,
         target_gene: str,
-        **run_args: t.Any
-    ) -> tuple[Regressor, float] | None:
+        gb_args: GBRArgs 
+    ) -> tuple[Regressor, GMStats] | None:
         match regressor_method:
-            case 'xgb' | 'stxgb':
-                return self.xgb_fit(target_gene, **run_args)
+            case 'xgb':
+                return self.xgb_fit(target_gene, t.cast(XGBArgs, gb_args))
+            case 'stxgb':
+                return self.xgb_fit(target_gene, t.cast(STXGBArgs, gb_args))
             case 'sgbr':
-                return self.sgbr_fit(target_gene, **run_args)
-            case 'lgb' | 'stlgb':
-                return self.lgb_fit(target_gene, **run_args)
+                return self.sgbr_fit(target_gene, t.cast(SGBMArgs, gb_args))
+            case 'stsgbr':
+                return self.sgbr_fit(target_gene, t.cast(STSGBMArgs, gb_args))
+            case 'lgb':
+                return self.lgb_fit(target_gene, t.cast(LGBArgs,  gb_args))
+            case 'stlgb':
+                return self.lgb_fit(target_gene, t.cast(STLGBArgs,  gb_args))
             case _:
                 return None
 
-    def update(self, gene: str, gmodel: Regressor, rtime: float, fit_time:float):
+    def update(self, gene: str, gmodel: Regressor, gstat: GMStats):
         gidx = self.sd_.gene_map[gene]
         mfeat = gmodel.feature_importances_
-        self.rstats_.gmodel_data[gidx].run_time = rtime
-        self.rstats_.gmodel_data[gidx].fit_time = fit_time
-        self.rstats_.gmodel_data[gidx].n_features = int(np.sum(mfeat != 0.0))
+        gstat.n_features = int(np.sum(mfeat != 0.0))
+        self.rstats_.gmodel_data[gidx] = gstat
         if gene in self.sd_.tf_map:
             mfeat = np.reshape(mfeat, shape=(1, self.sd_.ntfs-1))
             tidx = self.sd_.tf_map[gene]
@@ -189,15 +341,16 @@ class GBRunner:
 
     def gene_model(
         self,
-        method : RegressorMethod,
+        method : GBMethod,
         tgene: str,
-        **gb_args: t.Any
+        gb_args: GBRArgs 
     ):
         start_time = timer() 
-        fmdx  = self.fit(method, tgene, **gb_args)
+        fmdx  = self.fit(method, tgene, gb_args)
         if fmdx:
-            mdx, fit_time = fmdx
-            self.update(tgene, mdx, timer() - start_time, fit_time)
+            mdx, gstat = fmdx
+            gstat.run_time = timer() - start_time
+            self.update(tgene, mdx, gstat)
 
     def init_importance(self, take_n: int | None=None):
         self.importance_  = np.zeros(
@@ -222,15 +375,15 @@ class GBRunner:
 
     def build(
         self,
-        method: RegressorMethod,
+        method: GBMethod,
+        run_args: GBRArgs,
         take_n: int | None=None,
         use_tqdm: bool=True,
-        **run_args: t.Any,
     ):
         start_time = timer() 
         self.init_importance(take_n)
         for target_gene in self.genes_itr(take_n, use_tqdm):
-            self.gene_model(method, target_gene, **run_args)
+            self.gene_model(method, target_gene, run_args)
         self.rstats_.total_run_time = timer() - start_time
         print(f"Model Generation : {self.rstats_.total_run_time} seconds")
     
@@ -253,6 +406,7 @@ class GBRunner:
                 columns=pd.Series(["target", "TF"])
             )
             rdf["importance"] = self.importance_.flatten()
+            rdf.sort_values(by="importance", ascending=False, inplace=True)
             rdf.to_csv(out_file)
 
 
@@ -264,7 +418,7 @@ class ARBRunner:
 
     def run_regression(
         self,
-        method: RegressorMethod = 'arb:default',
+        method: GBMethod = 'arb:default',
         **_run_args: t.Any,
     ) -> pd.DataFrame:
         mat_shape = str(self.sd_.exp_matrix.shape)
@@ -291,7 +445,7 @@ class ARBRunner:
 
     def build(
         self,
-        method: RegressorMethod = 'arb:default',
+        method: GBMethod = 'arb:default',
         **run_args: t.Any
     ):
         start_time = timer()

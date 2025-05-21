@@ -1,5 +1,5 @@
 device: "cpu"
-method: "stlgb"
+method: "stsgbr"
 in_data:
   data: "dense"
   format: "ad"
@@ -8,8 +8,6 @@ in_data:
   tf_file: "data/pbmc/trrust_tf.txt"
   h5ad_file: "data/rsc/h5/adata.raw.h5ad"
 regressor_args:
-  regressor: "stlgb"
-  n_jobs: 32
-  force_col_wise: true
-rstats_file: "networks/stlgb100k_cpu_dense_stats.json"
-network_file: "networks/stlgb100k_cpu_dense.csv"
+  regressor: "stsgbr"
+rstats_file: "networks/stgbr100k_cpu_dense_stats.json"
+network_file: "networks/stgbr100k_cpu_dense.csv"
