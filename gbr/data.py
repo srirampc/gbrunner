@@ -180,3 +180,5 @@ class SCDataProcessor(ExpDataProcessor):
     def tf_exp_matrix(self) -> NDFloatArray:
         return self.tf_adata_.X  # pyright: ignore[reportReturnType]
 
+    def save(self, scdata_file: str):
+        self.adata_.write_h5ad(scdata_file)

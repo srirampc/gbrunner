@@ -29,6 +29,7 @@ class InputArgs(BaseModel):
     use_tqdm: bool = True
     rstats_file: str = "./run_stats.json"
     network_file: str = "./network.csv"
+    scdata_save_file: str | None = ""
 
 
 def run_grad_boost(rargs: InputArgs, exp_data: ExpDataProcessor):
@@ -61,6 +62,8 @@ def gen_scd_network(rargs: InputArgs):
             sc_data = None  # pyright: ignore[reportUnreachable]
     if sc_data is None:
         return
+    if rargs.scdata_save_file:
+        sc_data.save(rargs.scdata_save_file)
     sc_data.print()
     run_grad_boost(rargs, sc_data)
 
