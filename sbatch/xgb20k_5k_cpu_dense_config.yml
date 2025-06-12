@@ -1,0 +1,12 @@
+device: "cpu"
+method: "xgb"
+in_data:
+  data: "dense"
+  format: "ad"
+  ntop_genes: 5000
+  nsub_cells: 20000
+  tf_file: "data/pbmc/trrust_tf.txt"
+  h5ad_file: "data/rsc/h5/adata.raw.h5ad"
+scdata_save_file: "data/rsc/h5/adata.20k.5k.h5ad"
+rstats_file: "networks/xgb20k_5k_cpu_dense_stats.json"
+network_file: "networks/xgb20k_5k_cpu_dense.csv"
