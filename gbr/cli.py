@@ -176,6 +176,8 @@ if __name__ == "__main__":
     )
     csv_parser.add_argument("--rstats_out_file", default=def_args.rstats_file)
     csv_parser.add_argument("--out_file", default=def_args.network_file)
+    csv_parser.add_argument("--take_n", default=0)
+    csv_parser.add_argument("--use_tqdm", action="store_true")
     #
     ad_parser = subparsers.add_parser("ad", help="H5AD File as Input")
     ad_parser.add_argument("--ntop_genes", type=int, default=sc_data.ntop_genes)
